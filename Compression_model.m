@@ -6,29 +6,33 @@ conrodLength = 0.1365;            % Length of rod which connects the piston head
 cRatio = 21.5;                    % Ratio between min and max pressure[-]
 displacement = 722e-6;            % The volume of the cylinder [m^3]
 P0 = 101325;                      % Ambient Pressure [Pa]
- 
+r = stroke / 2;
 global Runiv Pref Tref
-Runiv= 8.314472;                   % Universal gas constant
-Pref= 1.01235e5;                   % Reference pressure, 1 atm!
-Tref= 298.15;                      % Reference Temperature
+Runiv = 8.314472;                 % Universal gas constant
+Pref = 1.01235e5;                 % Reference pressure, 1 atm!
+Tref = 298.15;                    % Reference Temperature
 
 % Diesel properties : For now we will use B7 diesel, which is the
 % commercially available in Europe
 
 rho = 836.1;                      % Density [kg/m^3]
 cn = 52.2;                        % Cetane ratio, how ignitable it is [-]
-lhv = 43e6;                         % Lower heating value, energy content per kg of fuel [J/kg]
+lhv = [43e6; 37e6];               % Lower heating value, energy content per kg of fuel [J/kg] left pure diesel right FAME
 eta = 2.7638e-6;                  % Viscosity [m2/kg]
-gamma = 1.4;                      % At this point we assume it to be 1.4, for ease of use
+gamma = 1.35;                     % Adjusted gamma for air-fuel mixture
 
 RPMn = 1000;                      % Unloaded RPM of a typical diesel engine
-rotTime = 60/RPMn;                % Time of a full rotation of 360 degrees [s]
-R_specific = 37;                  % This is an arbitrary value which is relative to the specific constant of B7 diesel, this will need to be found through stoichiometric relations
-m = 0.00009;                      % Also and arbitrary value for now
-Cp = 2.1e3;
+rotTime = 60 / RPMn;              % Time of a full rotation of 360 degrees [s]
+R_specific = 287;                 % Specific gas constant for air [J/(kg·K)]
+md = 0.000025;                    % Fuel mass per cycle [kg]
+Cp = 2.75e3;                      % Adjusted specific heat capacity at high temperature [J/kg·K]
+
+ma = 14.5 * md;                   % Air-fuel mass ratio (14.5:1) 
+mtot = ma + md;                   % Total mass (air + fuel)
+
 % Crank angle and time setup
-for i=1:1:720
-    t(i) = i*(rotTime)/720;
+for i = 1:1:720
+    t(i) = i * (rotTime) / 720;
     ca(i) = i;  % Crank angle in degrees, from 1 to 720
 end
 
@@ -37,38 +41,42 @@ p(1) = P0;
 T(1) = Tref;
 
 % Loop over each crank angle to compute volume, pressure, and temperature
-for n=2:1:720
-    % Pass a single crank angle ca(n) to the Volume function
-    V(n) = Volume(ca(n), cRatio, conrodLength, bore, displacement);  % Corrected here: Pass scalar ca(n)
+for n = 2:1:720
+    V(n) = Volume(ca(n), cRatio, conrodLength, bore, displacement, r);  % Corrected here: Pass scalar ca(n)
 
     switch true
         %% Intake Stroke
         case (ca(n) <= 180)
             p(n) = p(1);                                    % Pressure [Pa]
             T(n) = T(1);                                    % Temperature [K]
+            
         %% Compression Stroke
         case (ca(n) > 180 && ca(n) <= 359)
-            dQ_comb(n)=0;                                   % Heat released from combustion [J]
-            dQ(n)=0;                                        % Heat extracted from cycle [J]
-            T(n)=T(n-1)*(V(n-1)/V(n))^(gamma-1);            % Temperature after compression following first law [K]
-            p(n)=p(n-1)*(V(n-1)/V(n))^gamma;                % Pressure during compression following Poisson relations [Pa]
+            dQ_comb(n) = 0;                                 % Heat released from combustion [J]
+            dQ(n) = 0;                                      % Heat extracted from cycle [J]
+            T(n) = T(n-1) * (V(n-1) / V(n))^(gamma - 1);    % Temperature after compression following first law [K]
+            p(n) = p(n-1) * (V(n-1) / V(n))^gamma;          % Pressure during compression following Poisson relations [Pa]
 
         %% Combustion Phase
         case (ca(n) > 359 && ca(n) <= 360)
-            dQ_comb(n) = lhv * m;    % Heat released from combustion [J] based on stoichiometric content
-            dQ(n)=0;                                       % Heat extracted from cycle [J]
-            T(n)=T(n-1)+(p(n-1)*(V(n-1)-V(n))+dQ_comb(n)-dQ(n))/(m*Cp);      % Temperature after combustion following first law [K]
-            p(n)=(T(n)*R_specific*m)/(V(n));               % Pressure after combustion [Pa]
+            % Calculate the heat released during combustion
+            dQ_comb(n) = sum(lhv .* [md * 0.93; md * 0.07]);  % Heat released from both components (main fuel + FAME)
+            dQ(n) = 0;                                      % Heat extracted from cycle [J]
+            
+            % Temperature and pressure updates after combustion
+            T(n) = T(n-1) + (p(n-1) * (V(n-1) - V(n)) + dQ_comb(n) - dQ(n)) / (mtot * Cp);  % Temperature [K]
+            p(n) = (T(n) * R_specific * mtot) / V(n);          % Pressure after combustion [Pa]
 
         %% Expansion Stroke
         case (ca(n) > 360 && ca(n) <= 540)
-            T(n)=T(n-1)+(p(n-1)*(V(n-1)-V(n)))/(m*Cp);  % Temperature during expansion following first law [K]
-            p(n)=p(n-1)*(V(n-1)/V(n))^gamma;               % Pressure during expansion following Poisson relations [Pa]
+            % Temperature during expansion following first law [K]
+            T(n) = T(n-1) + (p(n-1) * (V(n-1) - V(n))) / (mtot * Cp);  
+            p(n) = p(n-1) * (V(n-1) / V(n))^gamma;  % Pressure during expansion following Poisson relations [Pa]
 
         %% Exhaust Phase
         case (ca(n) > 540 && ca(n) <= 720)
-            p(n)=p(1);
-            T(n)=T(1);                                    % Temperature of the mixture (K)
+            p(n) = p(1);
+            T(n) = T(1);                                    % Temperature of the mixture [K]
 
         otherwise
             % Handle unexpected values of ca
@@ -80,20 +88,20 @@ end
 
 % Create the P-V diagram
 figure(1)
-subplot(1,2,1)
+subplot(1, 2, 1)
 grid on
-plot(V(1,2:end), p(1,2:end), 'LineWidth', 2)
+plot(V(2:end), p(2:end), 'LineWidth', 2)
 hold on;
 
 % Annotate stroke phases on P-V diagram
-text(V(1,180), p(1,180), 'Intake', 'VerticalAlignment', 'bottom', 'HorizontalAlignment', 'center', 'FontSize', 12);
-text(V(1,360), p(1,360), 'Compression', 'VerticalAlignment', 'bottom', 'HorizontalAlignment', 'center', 'FontSize', 12);
-text(V(1,540), p(1,540), 'Combustion', 'VerticalAlignment', 'bottom', 'HorizontalAlignment', 'center', 'FontSize', 12);
+text(V(180), p(180), 'Intake', 'VerticalAlignment', 'bottom', 'HorizontalAlignment', 'center', 'FontSize', 12);
+text(V(360), p(360), 'Compression', 'VerticalAlignment', 'bottom', 'HorizontalAlignment', 'center', 'FontSize', 12);
+text(V(540), p(540), 'Combustion', 'VerticalAlignment', 'bottom', 'HorizontalAlignment', 'center', 'FontSize', 12);
 
 % Mark transition points on P-V diagram (ca. 180, 360, 540)
-plot(V(1,180), p(1,180), 'ro', 'MarkerFaceColor', 'r');
-plot(V(1,360), p(1,360), 'go', 'MarkerFaceColor', 'g');
-plot(V(1,540), p(1,540), 'bo', 'MarkerFaceColor', 'b');
+plot(V(180), p(180), 'ro', 'MarkerFaceColor', 'r');
+plot(V(360), p(360), 'go', 'MarkerFaceColor', 'g');
+plot(V(540), p(540), 'bo', 'MarkerFaceColor', 'b');
 
 grid off
 xlabel('Volume (m^3)');
@@ -102,7 +110,7 @@ title('P-V Diagram');
 legend('P-V curve', 'Location', 'best');
 
 % Create the Temperature vs Crank Angle plot
-subplot(1,2,2)
+subplot(1, 2, 2)
 plot(ca, T, 'LineWidth', 2)
 hold on;
 
@@ -125,14 +133,14 @@ grid on;
 
 %% Log-Log Plot of Volume vs Pressure
 figure(2)
-plot(log(V(1,2:end)), log(p(1,2:end)), 'LineWidth', 2);
+plot(log(V(2:end)), log(p(2:end)), 'LineWidth', 2);
 xlabel('log Volume (m^3)');
 ylabel('log Pressure (Pa)');
 title('Log-Log P-V Curve');
 grid on;
 
 %% Volume Function
-function V = Volume(ca, cRatio, conrodLength, bore, displacement)
+function V = Volume(ca, cRatio, conrodLength, bore, displacement, r)
     % Input parameters:
     % ca: Crank angle (in degrees)
     % cRatio: Compression ratio
@@ -143,14 +151,9 @@ function V = Volume(ca, cRatio, conrodLength, bore, displacement)
     % Convert crank angle to radians
     ca = deg2rad(ca);
 
-    % Calculate stroke length based on the crank angle
-    stroke = 2 * conrodLength * (1 - cos(ca));  % Stroke distance based on crank angle (m)
-    r = conrodLength + stroke / 2;  % Piston's radius of travel
-
     % Clearance volume based on compression ratio
     Vc = displacement / (cRatio - 1);
 
     % Volume calculation at a given crank angle
-    %V = Vc + (pi / 4) * bore^2 * (r - (r * cos(ca) + sqrt(conrodLength^2 - r^2 * sin(ca)^2)));
-    V = Vc + (pi / 4) * bore^2 * (r *(1- cos(ca) + conrodLength*sqrt(1 - (r/conrodLength)^2 * sin(ca)^2)));
+    V = Vc + (pi / 4) * bore^2 * (r + conrodLength - (r * cos(ca) + sqrt(conrodLength^2 - r^2 * sin(ca)^2)));
 end
