@@ -17,16 +17,16 @@ Tref = 298.15;                    % Reference Temperature
 
 rho = 836.1;                      % Density [kg/m^3]
 cn = 52.2;                        % Cetane ratio, how ignitable it is [-]
-lhv = [43e6; 37e6];               % Lower heating value, energy content per kg of fuel [J/kg] left pure diesel right FAME
 eta = 2.7638e-6;                  % Viscosity [m2/kg]
-gamma = 1.35;                     % Adjusted gamma for air-fuel mixture
 
+%% Assumed data Ingore these for stoichiometric analyis except lhv
+lhv = [43e6; 37e6];               % Lower heating value, energy content per kg of fuel [J/kg] left pure diesel, right FAME
 RPMn = 1000;                      % Unloaded RPM of a typical diesel engine
 rotTime = 60 / RPMn;              % Time of a full rotation of 360 degrees [s]
-R_specific = 287;                 % Specific gas constant for air [J/(kg·K)]
-md = 0.000025;                    % Fuel mass per cycle [kg]
-Cp = 2.75e3;                      % Adjusted specific heat capacity at high temperature [J/kg·K]
-
+R_specific = 287;                 % Specific gas constant for air [J/(kg·K)] at higher temperatures
+md = 0.0000025;                   % Fuel (diesel) mass per cycle [kg]
+Cp = 2.75e3;                      % Specific heat capacity at high temperature [J/kg·K]
+gamma = 1.35;                     % Gamma for air-fuel mixture
 ma = 14.5 * md;                   % Air-fuel mass ratio (14.5:1) 
 mtot = ma + md;                   % Total mass (air + fuel)
 
@@ -47,36 +47,36 @@ for n = 2:1:720
     switch true
         %% Intake Stroke
         case (ca(n) <= 180)
-            p(n) = p(1);                                    % Pressure [Pa]
-            T(n) = T(1);                                    % Temperature [K]
+            p(n) = p(1);                                                                                 % Pressure [Pa]
+            T(n) = T(1);                                                                                 % Temperature [K]
             
         %% Compression Stroke
         case (ca(n) > 180 && ca(n) <= 359)
-            dQ_comb(n) = 0;                                 % Heat released from combustion [J]
-            dQ(n) = 0;                                      % Heat extracted from cycle [J]
-            T(n) = T(n-1) * (V(n-1) / V(n))^(gamma - 1);    % Temperature after compression following first law [K]
-            p(n) = p(n-1) * (V(n-1) / V(n))^gamma;          % Pressure during compression following Poisson relations [Pa]
+            dQ_comb(n) = 0;                                                                              % Heat released from combustion [J]
+            dQ(n) = 0;                                                                                   % Heat extracted from cycle [J]
+            T(n) = T(n-1) * (V(n-1) / V(n))^(gamma - 1);                                                 % Temperature after compression following first law [K]
+            p(n) = p(n-1) * (V(n-1) / V(n))^gamma;                                                       % Pressure during compression following Poisson relations [Pa]
 
         %% Combustion Phase
         case (ca(n) > 359 && ca(n) <= 360)
             % Calculate the heat released during combustion
-            dQ_comb(n) = sum(lhv .* [md * 0.93; md * 0.07]);  % Heat released from both components (main fuel + FAME)
-            dQ(n) = 0;                                      % Heat extracted from cycle [J]
-            
-            % Temperature and pressure updates after combustion
-            T(n) = T(n-1) + (p(n-1) * (V(n-1) - V(n)) + dQ_comb(n) - dQ(n)) / (mtot * Cp);  % Temperature [K]
-            p(n) = (T(n) * R_specific * mtot) / V(n);          % Pressure after combustion [Pa]
+            dQ_comb(n) = sum(lhv .* [m_diesel(n-1); m_fame(n-1)]);                                       % Heat released from both components (main fuel + FAME)
+            dQ(n) = 0;                                                                                   % Heat extracted from cycle [J]
+            V(n)=V(n-1);
+            % Temperature and pressure updates after combustion 
+            T(n) = T(n-1) + (p(n-1) * (V(n-1) - V(n)) + dQ_comb(n) - dQ(n)) / (m(n) * Cp(n));            % Combution Temperature [K]
+            p(n) = (T(n) * R_specific(n) * m(n)) / V(n);                                                 % Pressure after combustion [Pa]
 
         %% Expansion Stroke
         case (ca(n) > 360 && ca(n) <= 540)
             % Temperature during expansion following first law [K]
-            T(n) = T(n-1) + (p(n-1) * (V(n-1) - V(n))) / (mtot * Cp);  
-            p(n) = p(n-1) * (V(n-1) / V(n))^gamma;  % Pressure during expansion following Poisson relations [Pa]
+            T(n) = T(n-1) + (p(n-1) * (V(n-1) - V(n))) / (m(n) * Cp(n));  
+            p(n) = p(n-1) * (V(n-1) / V(n))^gamma;                                                       % Pressure during expansion following Poisson relations [Pa]
 
         %% Exhaust Phase
         case (ca(n) > 540 && ca(n) <= 720)
             p(n) = p(1);
-            T(n) = T(1);                                    % Temperature of the mixture [K]
+            T(n) = T(1);                                                                                 % Temperature of the mixture [K]
 
         otherwise
             % Handle unexpected values of ca
