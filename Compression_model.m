@@ -20,13 +20,13 @@ cn = 52.2;                        % Cetane ratio, how ignitable it is [-]
 eta = 2.7638e-6;                  % Viscosity [m2/kg]
 
 %% Assumed data Ingore these for stoichiometric analyis except lhv
-lhv = [43e6; 37e6];               % Lower heating value, energy content per kg of fuel [J/kg] left pure diesel, right FAME
+lhv = [43e6;37e6];               % Lower heating value, energy content per kg of fuel [J/kg] left pure diesel, right FAME
 RPMn = 1000;                      % Unloaded RPM of a typical diesel engine
 rotTime = 60 / RPMn;              % Time of a full rotation of 360 degrees [s]
 R_specific = 287;                 % Specific gas constant for air [J/(kg·K)] at higher temperatures
-md = 0.0000025;                   % Fuel (diesel) mass per cycle [kg]
+md = 0.00005;                   % Fuel (diesel) mass per cycle [kg]
 Cp = 2.75e3;                      % Specific heat capacity at high temperature [J/kg·K]
-gamma = 1.35;                     % Gamma for air-fuel mixture
+gamma = 1.4;                     % Gamma for air-fuel mixture
 ma = 14.5 * md;                   % Air-fuel mass ratio (14.5:1) 
 mtot = ma + md;                   % Total mass (air + fuel)
 
@@ -45,45 +45,67 @@ for n = 2:1:720
     V(n) = Volume(ca(n), cRatio, conrodLength, bore, displacement, r);  % Corrected here: Pass scalar ca(n)
 
     switch true
+
+        case (ca(n) == 1)
+            p(n)=p(1);
+            T(n) = T(1);
+            V(n) = V(1);
+
         %% Intake Stroke
         case (ca(n) <= 180)
             p(n) = p(1);                                                                                 % Pressure [Pa]
-            T(n) = T(1);                                                                                 % Temperature [K]
-            
+            T(n) = T(1);    
+            V(n)= V(n);                                                                                             % Temperature [K]
+            %p(n) = (R_specific*T(n)/V(n));
+
         %% Compression Stroke
-        case (ca(n) > 180 && ca(n) <= 359)
+        case (ca(n) > 180 && ca(n) <= 360)
             dQ_comb(n) = 0;                                                                              % Heat released from combustion [J]
             dQ(n) = 0;                                                                                   % Heat extracted from cycle [J]
             T(n) = T(n-1) * (V(n-1) / V(n))^(gamma - 1);                                                 % Temperature after compression following first law [K]
             p(n) = p(n-1) * (V(n-1) / V(n))^gamma;                                                       % Pressure during compression following Poisson relations [Pa]
 
         %% Combustion Phase
-        case (ca(n) > 359 && ca(n) <= 360)
+        case (ca(n) > 360 && ca(n) <= 380)
+
             % Calculate the heat released during combustion
-            dQ_comb(n) = sum(lhv .* [m_diesel(n-1); m_fame(n-1)]);                                       % Heat released from both components (main fuel + FAME)
+            dQ_comb = sum(lhv .* [md*0.93; md*0.07]);                                       % Heat released from both components (main fuel + FAME)
             dQ(n) = 0;                                                                                   % Heat extracted from cycle [J]
-            V(n)=V(n-1);
+            p(n)=p(n-1);
             % Temperature and pressure updates after combustion 
-            T(n) = T(n-1) + (p(n-1) * (V(n-1) - V(n)) + dQ_comb(n) - dQ(n)) / (m(n) * Cp(n));            % Combution Temperature [K]
-            p(n) = (T(n) * R_specific(n) * m(n)) / V(n);                                                 % Pressure after combustion [Pa]
-
+            T(n) = T(359) + (dQ_comb - dQ(n)) / (mtot * Cp);            % Combution Temperature [K]
+            %V(n) = V(n-1)*(T(n)/T(n-1));
         %% Expansion Stroke
-        case (ca(n) > 360 && ca(n) <= 540)
+        case (ca(n) > 380 && ca(n) <= 540)
             % Temperature during expansion following first law [K]
-            T(n) = T(n-1) + (p(n-1) * (V(n-1) - V(n))) / (m(n) * Cp(n));  
-            p(n) = p(n-1) * (V(n-1) / V(n))^gamma;                                                       % Pressure during expansion following Poisson relations [Pa]
-
+              
+              T(n) = T(n-1) * (V(n-1) / V(n))^(gamma - 1); % Isentropic expansion
+              
+              p(n) = p(n-1) * (V(n-1) / V(n))^gamma;      % Isentropic expansion
+           
+                                                                   % Pressure during expansion following Poisson relations [Pa
         %% Exhaust Phase
         case (ca(n) > 540 && ca(n) <= 720)
-            p(n) = p(1);
-            T(n) = T(1);                                                                                 % Temperature of the mixture [K]
-
+             p(n) = p(1);
+             
+             T(n) = T(1); 
+             %p(n) = (R_specific*T(n)/V(n));
+                                                                                  % Temperature of the mixture [K]
+       % case (ca(n) > 540 && ca(n)<= 720)  
+           % V(n) = V(n);
+            %T(n) = T(1);
+           % p(n) = p(1);
         otherwise
             % Handle unexpected values of ca
             disp('Crank angle out of range (0 to 720 degrees).');
     end
 end
+%% Calculate Work Done
+% Calculate work done using numerical integration
+work_done = trapz(V, p);  % Trapz approximates the integral of P vs. V
 
+% Display the work
+fprintf('The work done during the cycle is %.2f J\n', work_done);
 %% Plotting Results
 
 % Create the P-V diagram
@@ -94,9 +116,9 @@ plot(V(2:end), p(2:end), 'LineWidth', 2)
 hold on;
 
 % Annotate stroke phases on P-V diagram
-text(V(180), p(180), 'Intake', 'VerticalAlignment', 'bottom', 'HorizontalAlignment', 'center', 'FontSize', 12);
-text(V(360), p(360), 'Compression', 'VerticalAlignment', 'bottom', 'HorizontalAlignment', 'center', 'FontSize', 12);
-text(V(540), p(540), 'Combustion', 'VerticalAlignment', 'bottom', 'HorizontalAlignment', 'center', 'FontSize', 12);
+text(V(1), p(1), 'Intake', 'VerticalAlignment', 'bottom', 'HorizontalAlignment', 'center', 'FontSize', 12);
+text(V(180), p(180), 'Compression', 'VerticalAlignment', 'bottom', 'HorizontalAlignment', 'center', 'FontSize', 12);
+text(V(359), p(359), 'Combustion', 'VerticalAlignment', 'bottom', 'HorizontalAlignment', 'center', 'FontSize', 12);
 
 % Mark transition points on P-V diagram (ca. 180, 360, 540)
 plot(V(180), p(180), 'ro', 'MarkerFaceColor', 'r');
