@@ -41,6 +41,27 @@ for i = 1:1:720
     ca(i) = i;  % Crank angle in degrees, from 1 to 720
 end
 
+%% Timing settings (degrees)
+intakeLength = 180;
+intakeRange = intakeLength;
+
+comprLength = 180;
+comprRange = intakeRange + comprLength;
+
+combLength  = 10;
+combRange = comprRange + combLength;
+
+expLength = 170;
+expRange = combRange + expLength;
+
+exhaustLength = 180;
+exhaustRange = expRange + exhaustLength;
+
+if exhaustRange <720
+    error("Timing does not sum to a full rotation.")
+end
+
+%% Initializing
 % Initialize pressure and temperature
 p(1) = P0;
 T(1) = Tref;
@@ -48,7 +69,7 @@ T(1) = Tref;
 
 W_inst = zeros(1, 720);                                         % Instantaneous work done at each crank angle
 
-
+%% Modelling
 for n = 2:1:720
     V(n) = Volume(ca(n), cRatio, conrodLength, bore, displacement, r);      % Volume at crank angle
 
@@ -59,61 +80,75 @@ for n = 2:1:720
             V(n) = V(1);
 
         %% Intake Stroke
-        case (ca(n) <= 180)
+        case (ca(n) <= intakeRange)
             p(n) = p(1);                                                                                 
             T(n) = T(1);    
             V(n) = V(n);
 
         %% Compression Stroke
-        case (ca(n) > 180 && ca(n) <= 360)
+        case (ca(n) > intakeRange && ca(n) <= comprRange)
               %Elements 
             iSp = myfind({Sp.Name},{'O2','N2','CO2','H2O','Diesel'});
             SpS = Sp(iSp);
             NSp = length(SpS);
             Mi = [SpS.Mass];
 
+            %Universal gas constant int
             R_O2 = Runiv/(Mi(1));
             R_N2 = Runiv/(Mi(2));
             R_Air = (0.79*R_O2)+(0.21*R_N2);
             
+            %Cp int
             CpO2 = CpNasa(T(n-1),SpS(1));
             CpN2 = CpNasa(T(n-1),SpS(2));
-
             CpAir = (0.79*CpO2)+(0.21*CpN2);
+            
+            %Gamma int
             gamma = CpAir/(CpAir-R_Air);
             
-            
+            %Adiabatic relations int
             T(n) = T(n-1) * (V(n-1) / V(n))^(gamma - 1);                                                 
             p(n) = p(n-1) * (V(n-1) / V(n))^gamma;
 
           
 
         %% Combustion Phase
-        case (ca(n) > 360 && ca(n) <= 390)
+        case (ca(n) > comprRange && ca(n) <= combRange)
+            
+            %Cp int air
             CpO2 = CpNasa(T(n-1),SpS(1));
             CpN2 = CpNasa(T(n-1),SpS(2));
             CpAir = (0.79*CpO2)+(0.21*CpN2);
+            
+            %Cp int fuel
+            CpDiesel = CpNasa(T(n-1),SpS(5));
+            
+            %M int
             M_air = (0.79*Mi(1))+(0.21*Mi(2));
-
-      
-
             M_Diesel = Mi(5);
             
+            %Mass fractions int
             Mf_Air = M_air/(M_Diesel+M_air);
             Mf_Diesel = M_Diesel/(M_Diesel+M_air);
 
-            CpDiesel = CpNasa(T(n-1),SpS(5));
-            
-            CpComb = (Mf_Air*CpAir) + (Mf_Diesel*CpDiesel); 
-
-            dQ_comb = sum(lhv .* [md * 0.93; md * 0.07]);           % Heat released from 93% pure diesel and 7% FAME
+            %dQ int, Assume adiabatic.
+            dQ_comb = sum(lhv .* [md * 0.93; md * 0.07]); 
+                % Heat released from 93% pure diesel and 7% FAME
+                % Note, this is the potential heat release over a complete
+                % combustion!
             dQ(n) = 0;                                              % For easier calculations, assume that there is no heat exchange in this small time instance
-            p(n) = p(n-1);
-            T(n) = T(359) + (V(n)*(p(n-1)-p(n)) + dQ_comb - dQ(n)) / (mtot * CpComb);        % Based on the first law of thermodynamics
+           
+            %Mixture Cp int
+            CpComb = (Mf_Air*CpAir) + (Mf_Diesel*CpDiesel);
             
+            %Pressure int, assume isobaric.
+            p(n) = p(n-1);
+            T(n) = T(n-1) + (V(n)*(p(n-1)-p(n)) + dQ_comb./combLength - dQ(n)) / (mtot * CpComb);        % Based on the first law of thermodynamics
+                %Note, dp = 0, dq = 0, so ONLY CpComb, dQ_comb as variables
+                %that change.
             
         %% Expansion Stroke
-        case (ca(n) > 390 && ca(n) <= 540)
+        case (ca(n) > combRange && ca(n) <= expRange)
             
     
             M_diesel = Mi(5);
@@ -165,7 +200,7 @@ for n = 2:1:720
             p(n) = p(n-1) * (V(n-1) / V(n))^gamma;
 
         %% Exhaust Phase
-        case (ca(n) > 540 && ca(n) <= 720)
+        case (ca(n) > expRange && ca(n) <= exhaustRange)
             p(n) = p(1);
             T(n) = T(1);
 
