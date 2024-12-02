@@ -48,10 +48,10 @@ intakeRange = intakeLength;
 comprLength = 180;
 comprRange = intakeRange + comprLength;
 
-combLength  = 10;
+combLength  = 30;
 combRange = comprRange + combLength;
 
-expLength = 170;
+expLength = 150;
 expRange = combRange + expLength;
 
 exhaustLength = 180;
