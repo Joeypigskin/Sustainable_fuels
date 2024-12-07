@@ -7,6 +7,11 @@ cRatio = 21.5;                    % Ratio between min and max pressure[-]
 displacement = 722e-6;            % The volume of the cylinder [m^3]
 P0 = 101325;                      % Ambient Pressure [Pa]
 r = stroke / 2;
+
+TdataBase = fullfile('Nasa/NasaThermalDatabase.mat');
+load(TdataBase);
+whos ;
+
 global Runiv Pref Tref
 Runiv = 8.314472;                 % Universal gas constant
 Pref = 1.01235e5;                 % Reference pressure, 1 atm!
@@ -25,7 +30,7 @@ RPMn = 1000;                      % Unloaded RPM of a typical diesel engine
 rotTime = 60 / RPMn;              % Time of a full rotation of 360 degrees [s]
 R_specific = 287;                 % Specific gas constant for air [J/(kg·K)] at higher temperatures
 md = 0.00005;                     % Fuel (diesel) mass per cycle [kg]
-Cp = 2.75e3;                      % Specific heat capacity at high temperature [J/kg·K]
+%Cp = 2.75e3;                      % Specific heat capacity at high temperature [J/kg·K]
 gamma = 1.4;                      % Gamma for air-fuel mixture
 ma = 14.5 * md;                   % Air-fuel mass ratio (14.5:1) 
 mtot = ma + md;                   % Total mass (air + fuel)
@@ -36,6 +41,27 @@ for i = 1:1:720
     ca(i) = i;  % Crank angle in degrees, from 1 to 720
 end
 
+%% Timing settings (degrees)
+intakeLength = 180;
+intakeRange = intakeLength;
+
+comprLength = 180;
+comprRange = intakeRange + comprLength;
+
+combLength  = 30;
+combRange = comprRange + combLength;
+
+expLength = 150;
+expRange = combRange + expLength;
+
+exhaustLength = 180;
+exhaustRange = expRange + exhaustLength;
+
+if exhaustRange <720
+    error("Timing does not sum to a full rotation.")
+end
+
+%% Initializing
 % Initialize pressure and temperature
 p(1) = P0;
 T(1) = Tref;
@@ -43,9 +69,7 @@ T(1) = Tref;
 
 W_inst = zeros(1, 720);                                         % Instantaneous work done at each crank angle
 
-
-
-
+%% Modelling
 for n = 2:1:720
     V(n) = Volume(ca(n), cRatio, conrodLength, bore, displacement, r);      % Volume at crank angle
 
@@ -56,30 +80,127 @@ for n = 2:1:720
             V(n) = V(1);
 
         %% Intake Stroke
-        case (ca(n) <= 180)
+        case (ca(n) <= intakeRange)
             p(n) = p(1);                                                                                 
             T(n) = T(1);    
             V(n) = V(n);
 
         %% Compression Stroke
-        case (ca(n) > 180 && ca(n) <= 360)
+        case (ca(n) > intakeRange && ca(n) <= comprRange)
+              %Elements 
+            iSp = myfind({Sp.Name},{'O2','N2','CO2','H2O','Diesel'});
+            SpS = Sp(iSp);
+            NSp = length(SpS);
+            Mi = [SpS.Mass];
+
+            %Universal gas constant int
+            R_O2 = Runiv/(Mi(1));
+            R_N2 = Runiv/(Mi(2));
+            R_Air = (0.79*R_O2)+(0.21*R_N2);
+            
+            %Cp int
+            CpO2 = CpNasa(T(n-1),SpS(1));
+            CpN2 = CpNasa(T(n-1),SpS(2));
+            CpAir = (0.79*CpO2)+(0.21*CpN2);
+            
+            %Gamma int
+            gamma = CpAir/(CpAir-R_Air);
+            
+            %Adiabatic relations int
             T(n) = T(n-1) * (V(n-1) / V(n))^(gamma - 1);                                                 
             p(n) = p(n-1) * (V(n-1) / V(n))^gamma;
 
-        %% Combustion Phase
-        case (ca(n) > 360 && ca(n) <= 390)
-            dQ_comb = sum(lhv .* [md * 0.93; md * 0.07]);           % Heat released from 93% pure diesel and 7% FAME
-            dQ(n) = 0;                                              % For easier calculations, assume that there is no heat exchange in this small time instance
-            p(n) = p(n-1);
-            T(n) = T(359) + (V(n)*(p(n-1)-p(n)) + dQ_comb - dQ(n)) / (mtot * Cp);        % Based on the first law of thermodynamics
+          
 
+        %% Combustion Phase
+        case (ca(n) > comprRange && ca(n) <= combRange)
+            
+            %Cp int air
+            CpO2 = CpNasa(T(n-1),SpS(1));
+            CpN2 = CpNasa(T(n-1),SpS(2));
+            CpAir = (0.79*CpO2)+(0.21*CpN2);
+            
+            %Cp int fuel
+            CpDiesel = CpNasa(T(n-1),SpS(5));
+            
+            %M int
+            M_air = (0.79*Mi(1))+(0.21*Mi(2));
+            M_Diesel = Mi(5);
+            
+            %Mass fractions int
+            Mf_Air = M_air/(M_Diesel+M_air);
+            Mf_Diesel = M_Diesel/(M_Diesel+M_air);
+
+            %dQ int, Assume adiabatic.
+            dQ_comb = sum(lhv .* [md * 0.93; md * 0.07]); 
+                % Heat released from 93% pure diesel and 7% FAME
+                % Note, this is the potential heat release over a complete
+                % combustion!
+            dQ(n) = 0;                                              % For easier calculations, assume that there is no heat exchange in this small time instance
+           
+            %Mixture Cp int
+            CpComb = (Mf_Air*CpAir) + (Mf_Diesel*CpDiesel);
+            
+            %Pressure int, assume isobaric.
+            p(n) = p(n-1);
+            T(n) = T(n-1) + (V(n)*(p(n-1)-p(n)) + dQ_comb./combLength - dQ(n)) / (mtot * CpComb);        % Based on the first law of thermodynamics
+                %Note, dp = 0, dq = 0, so ONLY CpComb, dQ_comb as variables
+                %that change.
+            
         %% Expansion Stroke
-        case (ca(n) > 390 && ca(n) <= 540)
-            T(n) = T(n-1) * (V(n-1) / V(n))^(gamma - 1);                                % Isentropic expansion
+        case (ca(n) > combRange && ca(n) <= expRange)
+            
+    
+            M_diesel = Mi(5);
+
+            R_CO2 = Runiv/(Mi(3));
+            R_H2O= Runiv/(Mi(4));
+             
+
+
+            O2toDiesel = 71/4;
+            CO2toDiesel = 48/4;
+            H2OtoDiesel = 46/4;
+
+            %reactants
+            molDiesel = md/M_diesel;
+            molO2 = molDiesel * O2toDiesel;
+            %products
+            molCO2 = molDiesel * CO2toDiesel;
+            molH2O = molDiesel * H2OtoDiesel;
+
+            molAir = ma/M_air;
+
+            molO2air = 0.79*molAir;
+            molN2 = 0.21 * molAir;
+
+            molO2Final = molO2air - molO2;
+
+            moltot = molCO2 + molH2O + molO2Final + molN2;
+
+            mfO2 = molO2Final/moltot;
+            mfH2O = molH2O/moltot;
+            mfCO2 = molCO2/moltot;
+            mfN2 = molN2/moltot;
+
+
+
+            CpO2 = CpNasa(T(n-1),SpS(1));
+            CpN2 = CpNasa(T(n-1),SpS(2));
+            CpCO2 = CpNasa(T(n-1),SpS(3));
+            CpH2O = CpNasa(T(n-1),SpS(4));
+
+
+            RExp = mfO2*R_O2 + mfH2O*R_H2O + mfCO2*R_CO2 + mfN2*R_N2;
+            CpExp = mfO2*CpO2 + mfH2O*CpH2O + mfCO2*CpCO2 + mfN2*CpN2;
+            gamma = CpExp/(CpExp-RExp);
+            
+            
+            T(n) = T(n-1) * (V(n-1) / V(n))^(gamma - 1);                                                 
             p(n) = p(n-1) * (V(n-1) / V(n))^gamma;
 
         %% Exhaust Phase
-        case (ca(n) > 540 && ca(n) <= 720)
+        case (ca(n) > expRange && ca(n) <= exhaustRange)
             p(n) = p(1);
             T(n) = T(1);
 
@@ -99,6 +220,7 @@ W_total = sum(W_inst); % Total work done over the cycle
 eta = W_total/(sum(lhv.*[md*0.93;md*0.07]));
 
 %% Plot Results
+
 
 % Display results
 fprintf('The mass fuel flow rate %.10f \n', m_fuel_dot);
